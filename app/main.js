@@ -1,22 +1,40 @@
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
 
-// You can use print statements as follows for debugging, they'll be visible when running tests.
-// console.log("Logs from your program will appear here!");
-
-// Uncomment this to pass the first stage
 const requestParser = (data) => {
   const dataString = data.toString("utf-8");
   const [firstLine, host, userAgentString] = dataString.split("\r\n");
-  const [method, path, protocol] = firstLine.split(" ");
+  const [method, requestPath, protocol] = firstLine.split(" ");
   const userAgent = userAgentString.slice(12);
-  if (path.startsWith("/echo/")) {
-    const content = path.slice(6);
-    return { method, path, protocol, content };
+  if (requestPath.startsWith("/echo/")) {
+    const content = requestPath.slice(6);
+    return { method, requestPath, protocol, content };
   }
-  if (path === "/user-agent") {
-    return { method, path, protocol, userAgent };
+  if (requestPath === "/user-agent") {
+    return { method, requestPath, protocol, userAgent };
   }
-  return { method, path, protocol };
+
+  if (requestPath.startsWith("/files/") && process.argv[2] === "--directory") {
+    const directory = process.argv[3];
+    const filePath = requestPath.slice(7);
+    const fullPath = path.join(directory, filePath);
+
+    if (fs.existsSync(fullPath)) {
+      try {
+        const fileContent = fs.readFileSync(fullPath, {
+          encoding: "utf-8",
+        });
+
+        return { method, requestPath, protocol, fileContent };
+      } catch (error) {
+        console.log("error", error);
+        return { method, requestPath, protocol, fileContent: undefined };
+      }
+    }
+  }
+
+  return { method, requestPath, protocol };
 };
 
 const server = net.createServer();
@@ -24,8 +42,9 @@ server.on("connection", (socket) => {
   console.log("Client connected");
 
   socket.on("data", (data) => {
-    const { method, path, protocol, userAgent, content } = requestParser(data);
-    console.log(userAgent, content);
+    const { method, requestPath, protocol, userAgent, content, fileContent } =
+      requestParser(data);
+
     if (content) {
       socket.write(
         `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length:${content.length}\r\n\r\n${content}`
@@ -36,10 +55,15 @@ server.on("connection", (socket) => {
         `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length:${userAgent.length}\r\n\r\n${userAgent}`
       );
     }
-    if (path === "/") {
+
+    if (requestPath === "/") {
       socket.write("HTTP/1.1 200 OK\r\n\r\n");
       socket.end();
       server.close();
+    } else if (fileContent) {
+      socket.write(
+        `HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length:${fileContent.length}\r\n\r\n${fileContent}`
+      );
     } else {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.end();
